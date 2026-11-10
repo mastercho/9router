@@ -164,9 +164,55 @@ const REFRESH_HANDLERS = {
   "minimax-code": (c, log) => refreshMiniMaxCodeToken("minimax-code", c.refreshToken, log),
   "minimax-code-global": (c, log) => refreshMiniMaxCodeToken("minimax-code-global", c.refreshToken, log),
   nous: (c, log) => refreshNousToken(c.refreshToken, log),
+  perch: (c, log) => refreshPerchToken(c, log),
   vertex: vertexRefreshHandler,
   "vertex-partner": vertexRefreshHandler
 };
+
+/** Refresh Perch Supabase session (same as perchai-cli / perch2api). */
+async function refreshPerchToken(credentials, log) {
+  const appUrl = (credentials?.providerSpecificData?.appUrl || "https://app.perchai.app").replace(/\/+$/, "");
+  const cfgRes = await fetch(`${appUrl}/api/perch-terminal/cli-auth/config`, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!cfgRes.ok) {
+    log?.warn?.("TOKEN_REFRESH", `Perch cli-auth/config HTTP ${cfgRes.status}`);
+    return null;
+  }
+  const cfg = await cfgRes.json().catch(() => null);
+  if (!cfg?.supabaseUrl || !cfg?.supabaseAnonKey) {
+    log?.warn?.("TOKEN_REFRESH", "Perch cli-auth/config missing supabase credentials");
+    return null;
+  }
+  const res = await fetch(`${cfg.supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: cfg.supabaseAnonKey,
+      Authorization: `Bearer ${cfg.supabaseAnonKey}`,
+    },
+    body: JSON.stringify({ refresh_token: credentials.refreshToken }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body?.access_token) {
+    log?.warn?.("TOKEN_REFRESH", `Perch refresh failed: HTTP ${res.status}`);
+    return null;
+  }
+  return {
+    accessToken: body.access_token,
+    refreshToken: body.refresh_token || credentials.refreshToken,
+    expiresIn: body.expires_in || 3600,
+    providerSpecificData: {
+      ...(credentials.providerSpecificData || {}),
+      expiresAt: typeof body.expires_at === "number"
+        ? body.expires_at
+        : Math.floor(Date.now() / 1000) + (body.expires_in || 3600),
+      userId: body.user?.id || credentials.providerSpecificData?.userId,
+    },
+  };
+}
 
 export async function getAccessToken(provider, credentials, log) {
   if (!credentials || !credentials.refreshToken || typeof credentials.refreshToken !== "string") {

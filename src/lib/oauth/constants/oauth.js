@@ -131,6 +131,12 @@ export const GROK_CLI_CONFIG = { ...PROVIDER_OAUTH["grok-cli"] };
 // (Meta rejects refresh_token grants; the minted Model API key never expires).
 export const MUSE_CONFIG = { ...PROVIDER_OAUTH["muse"] };
 
+// OpenDesign Cloud — device authorization on amr-api → sk-amr runtime key + vela_ctrl control key
+export const OPENDESIGN_CONFIG = { ...PROVIDER_OAUTH["opendesign"] };
+
+// Perch AI — Supabase PKCE against app.perchai.app (subscription Web/Desktop/CLI access)
+export const PERCH_CONFIG = { ...PROVIDER_OAUTH["perch"] };
+
 // Trae (ByteDance marscode) OAuth — authorization_code flow with local callback.
 //   1) POST GetLoginGuidance {loginTraceID} → {Result.LoginHost}
 //   2) Browser opens ${loginHost}/authorization?client_id=...&login_trace_id=...&auth_callback_url=${cb}

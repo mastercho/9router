@@ -92,6 +92,8 @@ import p86 from "./together.js";
 import p87 from "./topaz.js";
 import p88 from "./tortoise.js";
 import p89 from "./venice.js";
+import p154 from "./opendesign.js";
+import p155 from "./perch.js";
 import p90 from "./vercel-ai-gateway.js";
 import p91 from "./vertex-partner.js";
 import p92 from "./vertex.js";
@@ -241,6 +243,8 @@ export default [
   p87,
   p88,
   p89,
+  p154,
+  p155,
   p90,
   p91,
   p92,

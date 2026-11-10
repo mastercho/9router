@@ -32,6 +32,8 @@ import glm from "./glm.js";
 import minimaxCode from "./minimax-code.js";
 import minimaxCodeGlobal from "./minimax-code-global.js";
 import nous from "./nous.js";
+import opendesign from "./opendesign.js";
+import perch from "./perch.js";
 
 // Provider configurations
 const PROVIDERS = {
@@ -63,6 +65,8 @@ const PROVIDERS = {
   "minimax-code": minimaxCode,
   "minimax-code-global": minimaxCodeGlobal,
   nous,
+  opendesign,
+  perch,
 };
 
 export { PROVIDERS };

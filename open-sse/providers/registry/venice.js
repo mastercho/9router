@@ -13,7 +13,7 @@ export default {
     textIcon: "VE",
     website: "https://venice.ai",
     notice: {
-      text: "OpenAI-compatible. Private inference + uncensored models (Venice Uncensored, GLM, Qwen, DeepSeek, Llama).",
+      text: "API-key / credits only. Venice Pro/Pro+/Max unlimited text is web/app only — API usage is metered separately and is NOT included in the subscription.",
       apiKeyUrl: "https://venice.ai/settings/api",
     },
   },
