@@ -270,6 +270,7 @@ export async function GET(request, { params }) {
         "muse",
         "glm",
         "nous",
+        "opendesign",
       ];
       let deviceData;
       if (noPkceDeviceProviders.includes(provider)) {

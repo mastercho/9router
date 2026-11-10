@@ -296,6 +296,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         "minimax-code",
         "minimax-code-global",
         "nous",
+        "opendesign",
       ];
       if (deviceCodeProviders.includes(provider)) {
         setIsDeviceCode(true);
@@ -342,6 +343,11 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
           ? { _zcodePollToken: data._zcodePollToken }
           : (provider === "minimax-code" || provider === "minimax-code-global")
           ? { _minimaxPollByUser: data._minimaxPollByUser }
+          : provider === "opendesign"
+          ? {
+              _odDeviceSecret: data._odDeviceSecret,
+              _odDeviceId: data._odDeviceId || data.device_code,
+            }
           : null;
         startPolling(
           // MiniMax's device-code variant returns no device_code: the token
