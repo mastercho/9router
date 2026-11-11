@@ -1,6 +1,6 @@
 import http from "http";
 import { URL } from "url";
-import { CODEX_CONFIG, TRAE_CONFIG, WINDSURF_CONFIG, ZED_HOSTED_CONFIG } from "../constants/oauth.js";
+import { CODEX_CONFIG, TRAE_CONFIG, WINDSURF_CONFIG, ZED_HOSTED_CONFIG, PERCH_CONFIG } from "../constants/oauth.js";
 
 // Loopback origin guard for local callback proxies.
 // Legit OAuth redirects are top-level navigations (no `Origin` header); a cross-site
@@ -969,5 +969,162 @@ export function stopXiaomiMimoProxy() {
   // session — each holds an X25519 private key and they would otherwise
   // accumulate for the process lifetime (one per /authorize call).
   xiaomiMimoSessions.clear();
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Perch AI — Supabase PKCE loopback on 127.0.0.1:<fixedPort>/callback
+// Same shape as xAI/Codex. Supabase often returns ?code= without echoing
+// state, so we also accept the single newest pending session.
+// ───────────────────────────────────────────────────────────────────────────
+
+let perchProxyServer = null;
+let perchProxyTimeout = null;
+const PERCH_PROXY_TIMEOUT_MS = 300000;
+const PERCH_PROXY_PORT = Number(PERCH_CONFIG?.fixedPort) || 45871;
+const PERCH_CALLBACK_PATH = PERCH_CONFIG?.callbackPath || "/callback";
+const perchPendingExchanges = new Map();
+
+export function registerPerchSession({ state, codeVerifier, redirectUri }) {
+  if (!state || !codeVerifier || !redirectUri) return false;
+  perchPendingExchanges.set(state, {
+    codeVerifier,
+    redirectUri,
+    status: "pending",
+    createdAt: Date.now(),
+  });
+  return true;
+}
+
+export function getPerchSessionStatus(state) {
+  return perchPendingExchanges.get(state) || null;
+}
+
+export function clearPerchSession(state) {
+  perchPendingExchanges.delete(state);
+}
+
+function findPerchSession(state) {
+  if (state && perchPendingExchanges.has(state)) return perchPendingExchanges.get(state);
+  // Supabase redirect may omit state — use newest pending session.
+  let newest = null;
+  for (const session of perchPendingExchanges.values()) {
+    if (session.status !== "pending") continue;
+    if (!newest || session.createdAt > newest.createdAt) newest = session;
+  }
+  return newest;
+}
+
+/**
+ * Start Perch OAuth callback proxy on 127.0.0.1:45871.
+ * Works when the browser shares loopback with this process (local PC).
+ * On Unraid/Docker accessed remotely, the browser hits the user's PC
+ * loopback instead — use manual paste of the callback URL in that case.
+ */
+export function startPerchProxy(appPort) {
+  return new Promise((resolve) => {
+    if (perchProxyServer) {
+      resolve({ success: true, port: PERCH_PROXY_PORT, callbackUrl: `http://127.0.0.1:${PERCH_PROXY_PORT}${PERCH_CALLBACK_PATH}` });
+      return;
+    }
+
+    const server = http.createServer(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (url.pathname !== PERCH_CALLBACK_PATH && url.pathname !== "/callback" && url.pathname !== "/auth/callback") {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(renderCodexResultPage(false, "Cross-origin callback rejected"));
+        return;
+      }
+
+      const code = url.searchParams.get("code");
+      const state = url.searchParams.get("state");
+      const errorParam = url.searchParams.get("error");
+      const session = findPerchSession(state);
+
+      if (session) {
+        try {
+          if (errorParam) {
+            throw new Error(url.searchParams.get("error_description") || errorParam);
+          }
+          if (!code) throw new Error("No authorization code received");
+
+          const { exchangeTokens } = await import("../providers.js");
+          const { createProviderConnection } = await import("@/models");
+
+          const tokenData = await exchangeTokens(
+            "perch",
+            code,
+            session.redirectUri,
+            session.codeVerifier,
+            state,
+          );
+          const connection = await createProviderConnection({
+            provider: "perch",
+            authType: "oauth",
+            ...tokenData,
+            expiresAt: tokenData.expiresIn
+              ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
+              : null,
+            testStatus: "active",
+          });
+
+          session.status = "done";
+          session.connectionId = connection.id;
+          session.email = connection.email;
+
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(renderCodexResultPage(true, "Perch signed in. You can close this window."));
+        } catch (err) {
+          session.status = "error";
+          session.error = err.message;
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(renderCodexResultPage(false, err.message));
+        } finally {
+          stopPerchProxy();
+        }
+        return;
+      }
+
+      // No registered session: bounce to app /callback for channel fallback.
+      const redirectUrl = `http://127.0.0.1:${appPort || "20128"}/callback${url.search}`;
+      res.writeHead(302, { Location: redirectUrl });
+      res.end();
+      stopPerchProxy();
+    });
+
+    server.listen(PERCH_PROXY_PORT, "127.0.0.1", () => {
+      perchProxyServer = server;
+      perchProxyTimeout = setTimeout(() => stopPerchProxy(), PERCH_PROXY_TIMEOUT_MS);
+      resolve({
+        success: true,
+        port: PERCH_PROXY_PORT,
+        callbackUrl: `http://127.0.0.1:${PERCH_PROXY_PORT}${PERCH_CALLBACK_PATH}`,
+      });
+    });
+
+    server.on("error", (err) => {
+      if (err.code === "EADDRINUSE") {
+        resolve({ success: false, reason: "port_busy" });
+      } else {
+        resolve({ success: false, reason: err.message });
+      }
+    });
+  });
+}
+
+export function stopPerchProxy() {
+  if (perchProxyTimeout) {
+    clearTimeout(perchProxyTimeout);
+    perchProxyTimeout = null;
+  }
+  if (perchProxyServer) {
+    perchProxyServer.close();
+    perchProxyServer = null;
+  }
 }
 

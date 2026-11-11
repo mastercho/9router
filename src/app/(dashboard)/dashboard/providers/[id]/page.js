@@ -1651,7 +1651,13 @@ export default function ProviderDetailPage() {
                       icon="add"
                       onClick={triggerAddConnection}
                     >
-                      {isCompatible ? "Add API Key" : (providerId === "iflow" ? "OAuth" : "Add Connection")}
+                      {isCompatible
+                        ? "Add API Key"
+                        : providerId === "iflow"
+                          ? "OAuth"
+                          : providerId === "perch"
+                            ? "Sign in with Perch"
+                            : "Add Connection"}
                     </Button>
                   </>
                 )}

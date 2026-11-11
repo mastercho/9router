@@ -14,12 +14,16 @@ async function readJson(res) {
 /**
  * Perch AI subscription login — Supabase PKCE (same as perchai-cli / perch2api).
  * prepareConfig loads supabaseUrl + anon key from cli-auth/config.
+ *
+ * Callback MUST be http://127.0.0.1:<port>/callback (Perch redirectHost).
+ * On Unraid/remote Docker the browser hits the user's PC loopback — paste the
+ * failed callback URL into the OAuth modal to finish exchange.
  */
 const perch = {
   config: PERCH_CONFIG,
   flowType: "authorization_code_pkce",
   fixedPort: PERCH_CONFIG.fixedPort || 45871,
-  callbackPath: PERCH_CONFIG.callbackPath || "/auth/callback",
+  callbackPath: PERCH_CONFIG.callbackPath || "/callback",
 
   prepareConfig: async (config) => {
     const appUrl = (config.appUrl || "https://app.perchai.app").replace(/\/+$/, "");
@@ -34,9 +38,11 @@ const perch = {
     const provider = Array.isArray(cfg.providers) && cfg.providers.includes("google")
       ? "google"
       : (cfg.providers?.[0] || "google");
+    const redirectHost = String(cfg.redirectHost || "127.0.0.1").trim() || "127.0.0.1";
     return {
       ...config,
       appUrl,
+      redirectHost,
       supabaseUrl: String(cfg.supabaseUrl).replace(/\/+$/, ""),
       supabaseAnonKey: cfg.supabaseAnonKey,
       oauthProvider: provider,
@@ -51,10 +57,11 @@ const perch = {
       provider: config.oauthProvider || "google",
       redirect_to: redirectUri,
       code_challenge: codeChallenge,
-      code_challenge_method: "s256",
+      // Supabase / GoTrue expect uppercase S256 (perchai-cli / perch2api).
+      code_challenge_method: "S256",
       apikey: config.supabaseAnonKey || config.clientId,
-      state,
     });
+    if (state) params.set("state", state);
     if ((config.oauthProvider || "google") === "google") {
       params.set("prompt", "select_account");
     }
@@ -77,12 +84,16 @@ const perch = {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const data = await readJson(response);
-    if (!response.ok || !data?.access_token) {
+    // Some GoTrue responses nest under session; perch2api accepts either.
+    const tokens = data?.session && data.session.access_token ? data.session : data;
+    if (!response.ok || !tokens?.access_token) {
       throw new Error(
-        `Perch token exchange failed: HTTP ${response.status} ${data?.error_description || data?.error || ""}`.trim(),
+        `Perch token exchange failed: HTTP ${response.status} ${data?.error_description || data?.msg || data?.error || ""}`.trim(),
       );
     }
-    return data;
+    // Preserve user on the object mapTokens expects.
+    if (!tokens.user && data?.user) tokens.user = data.user;
+    return tokens;
   },
 
   mapTokens: (tokens) => {

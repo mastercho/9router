@@ -19,7 +19,7 @@ export default {
     textIcon: "PC",
     website: "https://perchai.app",
     notice: {
-      text: "Uses your Perch Starter/Pro/Ultra subscription via CLI OAuth. Unofficial model-call bridge — Perch does not offer a public chat API.",
+      text: "Click Add Connection (not the Perch website link). Sign in with Google/GitHub; on Unraid, paste the 127.0.0.1:45871/callback?code=… URL from the address bar after login. Unofficial model-call bridge — no public Perch chat API.",
       signupUrl: "https://perchai.app/pricing",
     },
   },
@@ -45,8 +45,9 @@ export default {
     appUrl: "https://app.perchai.app",
     cliAuthConfigUrl: "https://app.perchai.app/api/perch-terminal/cli-auth/config",
     modelCallUrl: "https://app.perchai.app/api/perch-terminal/model-call",
-    // PKCE against Supabase (provider google/github from config)
-    callbackPath: "/auth/callback",
+    // PKCE against Supabase (provider google/github from config).
+    // Must match Perch cli-auth redirectHost (127.0.0.1) + /callback.
+    callbackPath: "/callback",
     fixedPort: 45871,
     cliVersion: "2.4.118",
     lane: "code",

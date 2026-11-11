@@ -377,6 +377,9 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         redirectUri = "http://localhost:1455/auth/callback";
       } else if (provider === "xai") {
         redirectUri = "http://127.0.0.1:56121/callback";
+      } else if (provider === "perch") {
+        // Perch cli-auth redirectHost is 127.0.0.1 — must match exactly.
+        redirectUri = "http://127.0.0.1:45871/callback";
       } else {
         redirectUri = `http://localhost:${appPort}/callback`;
       }
@@ -433,11 +436,35 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         }
       }
 
-      setAuthData({ ...data, redirectUri, codexServerSide, xaiServerSide });
+      // Perch: same fixed-port pattern (127.0.0.1:45871). On Unraid/remote the
+      // browser cannot reach the container loopback — always offer paste.
+      let perchProxyActive = false;
+      let perchServerSide = false;
+      if (provider === "perch") {
+        try {
+          const proxyUrl = new URL(`/api/oauth/perch/start-proxy`, window.location.origin);
+          proxyUrl.searchParams.set("app_port", appPort);
+          proxyUrl.searchParams.set("state", data.state);
+          proxyUrl.searchParams.set("code_verifier", data.codeVerifier);
+          proxyUrl.searchParams.set("redirect_uri", redirectUri);
+          const proxyRes = await fetch(proxyUrl.toString());
+          const proxyData = await proxyRes.json();
+          perchProxyActive = proxyData.success;
+          perchServerSide = !!proxyData.serverSide;
+        } catch {
+          perchProxyActive = false;
+        }
+      }
+
+      setAuthData({ ...data, redirectUri, codexServerSide, xaiServerSide, perchServerSide });
 
       // Take ownership of server-side proxies so close stops them exactly once
       // (replaces the per-provider stop branches; same behavior, one ledger).
-      if ((provider === "codex" && codexProxyActive) || (provider === "xai" && xaiProxyActive)) {
+      if (
+        (provider === "codex" && codexProxyActive)
+        || (provider === "xai" && xaiProxyActive)
+        || (provider === "perch" && perchProxyActive)
+      ) {
         flowRef.current.proxyStarted = true;
         flowRef.current.proxyProvider = provider;
         flowRef.current.stopSent = false;
@@ -467,6 +494,11 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         if (!popupRef.current) {
           setStep("input");
         }
+      } else if (provider === "perch") {
+        // Always show paste UI: Unraid/Docker remote browsers never hit container 127.0.0.1.
+        // Local same-machine installs still auto-complete via poll when proxy is up.
+        setStep("input");
+        window.open(data.authUrl, "_blank", "noopener,noreferrer");
       } else if (!isLocalhost || provider === "codex" || provider === "xai") {
         // Non-localhost or proxy failed: manual input mode
         setStep("input");
@@ -540,9 +572,11 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       ? "codex"
       : authData?.xaiServerSide
         ? "xai"
-        : authData?.proxyProvider
-          ? authData.proxyProvider
-          : null;
+        : authData?.perchServerSide
+          ? "perch"
+          : authData?.proxyProvider
+            ? authData.proxyProvider
+            : null;
     if (!pollProvider || !authData?.state) return;
     if (callbackProcessedRef.current) return;
     let cancelled = false;
@@ -764,13 +798,20 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   if (!provider || !providerInfo) return null;
   const isXaiProvider = provider === "xai";
   const isKimchiProvider = provider === "kimchi";
+  const isPerchProvider = provider === "perch";
   const deviceLoginUrl = deviceData?.verification_uri_complete || deviceData?.verification_uri || "";
-  const modalTitle = isXaiProvider ? "Connect Grok Build OAuth" : `Connect ${providerInfo.name}`;
+  const modalTitle = isXaiProvider
+    ? "Connect Grok Build OAuth"
+    : isPerchProvider
+      ? "Connect Perch AI (CLI OAuth)"
+      : `Connect ${providerInfo.name}`;
   const manualPlaceholder = isXaiProvider
     ? "http://127.0.0.1:56121/callback?code=... or copied code"
-    : isKimchiProvider
-      ? `${placeholderUrl.replace("code=...", "token=...")} or copied token`
-      : placeholderUrl;
+    : isPerchProvider
+      ? "http://127.0.0.1:45871/callback?code=..."
+      : isKimchiProvider
+        ? `${placeholderUrl.replace("code=...", "token=...")} or copied token`
+        : placeholderUrl;
 
   return (
     <Modal isOpen={isOpen} title={modalTitle} onClose={handleClose} size="lg">
@@ -887,14 +928,22 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 
               <div>
                 <p className="text-sm font-medium mb-2">
-                  Step 2: Paste the {provider === "xai" ? "callback URL or copied code" : isKimchiProvider ? "callback URL or copied token" : "callback URL"} here
+                  Step 2: Paste the {provider === "xai"
+                    ? "callback URL or copied code"
+                    : isPerchProvider
+                      ? "127.0.0.1 callback URL"
+                      : isKimchiProvider
+                        ? "callback URL or copied token"
+                        : "callback URL"} here
                 </p>
                 <p className="text-xs text-text-muted mb-2">
                   {provider === "xai"
                     ? "If xAI shows a code instead of redirecting, paste that code here."
-                    : isKimchiProvider
-                      ? "After authorization, copy the full callback URL or token from your browser."
-                    : "After authorization, copy the full URL from your browser."}
+                    : isPerchProvider
+                      ? "After Google/GitHub login the browser opens http://127.0.0.1:45871/callback?code=… — even if the page says connection refused (normal on Unraid), copy that FULL address-bar URL and paste it here."
+                      : isKimchiProvider
+                        ? "After authorization, copy the full callback URL or token from your browser."
+                        : "After authorization, copy the full URL from your browser."}
                 </p>
                 <Input
                   value={callbackUrl}
