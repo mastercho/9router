@@ -60,11 +60,47 @@ describe("getOpenDesignUsage", () => {
       total: 100,
       remaining: 90,
     });
-    expect(usage.quotas["7 days"]).toMatchObject({
+    expect(usage.quotas.Weekly).toMatchObject({
       used: 40,
       total: 200,
       remaining: 160,
     });
+    expect(usage.quotas["7 days"]).toBeUndefined();
+    expect(usage.message).toMatch(/5 hours \+ Weekly|no separate Monthly/i);
+  });
+
+  it("Plus-only weekly window explains missing 5h and monthly meters", async () => {
+    proxyAwareFetch
+      .mockResolvedValueOnce(jsonResponse(200, { activeWorkspaceId: "ws_plus", personalMembershipTier: "plus" }))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        balanceUsd: 0,
+        codingPlan: {
+          eligible: true,
+          tier: "plus",
+          windows: [
+            {
+              durationSeconds: 7 * 24 * 3600,
+              usedCredits: "12000",
+              limitCredits: "40000",
+              remainingCredits: "28000",
+              resetsAt: "2026-11-18T10:00:00.000Z",
+            },
+          ],
+        },
+      }))
+      .mockResolvedValueOnce(jsonResponse(200, { membershipTier: "plus" }));
+
+    const usage = await getOpenDesignUsage(null, null, { controlKey: "vela_ctrl_plus" });
+    expect(usage.plan).toMatch(/Design Plan Plus/i);
+    expect(usage.quotas.Weekly).toMatchObject({
+      used: 12000,
+      total: 40000,
+      remaining: 28000,
+    });
+    expect(usage.quotas["5 hours"]).toBeUndefined();
+    expect(usage.quotas.Monthly).toBeUndefined();
+    expect(usage.message).toMatch(/Weekly \(7-day\)|no 5-hour|no OpenCode-style Monthly/i);
+    expect(usage.message).toMatch(/\$160/);
   });
 
   it("shows Free wallet trial balance when Design Plan is not eligible", async () => {

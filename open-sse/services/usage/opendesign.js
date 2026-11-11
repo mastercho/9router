@@ -8,6 +8,14 @@
  *   GET  /api/v1/workspaces/current
  *   GET  /api/v1/workspaces/{id}/billing/preflight
  *   GET  /api/v1/billing/summary
+ *
+ * OpenDesign Design Plan (official billing help):
+ *   - Go: live 5-hour + 7-day windows
+ *   - Plus / Pro / Max: live 7-day window only (no 5-hour)
+ *   - There is NO separate monthly Design Plan % meter in preflight
+ *     (unlike OpenCode Go). Docs list a billing-period Design Plan maximum
+ *     and Top Model Credits (Plus+) that reset on the billing cycle; those
+ *     are not returned as codingPlan.windows.
  */
 
 import { proxyAwareFetch } from "../../utils/proxyFetch.js";
@@ -15,6 +23,14 @@ import { parseResetTime, toFiniteNumber } from "./shared.js";
 
 const CONTROL = "https://amr-api.open-design.ai";
 const TIMEOUT_MS = 20_000;
+
+/** Published Individual plan caps (USD). Live remaining is not in preflight. */
+const PLAN_CAPS = {
+  go: { designPlanMonthUsd: 120, topModelMonthUsd: 0, weeklyUsd: 30, fiveHourUsd: 10 },
+  plus: { designPlanMonthUsd: 160, topModelMonthUsd: 20, weeklyUsd: 40, fiveHourUsd: null },
+  pro: { designPlanMonthUsd: 360, topModelMonthUsd: 120, weeklyUsd: 90, fiveHourUsd: null },
+  max: { designPlanMonthUsd: 600, topModelMonthUsd: 300, weeklyUsd: 150, fiveHourUsd: null },
+};
 
 function text(v) {
   return typeof v === "string" && v.trim() ? v.trim() : "";
@@ -30,16 +46,22 @@ function controlKeyOf(accessToken, apiKey, providerSpecificData) {
   return "";
 }
 
+/**
+ * Match OpenCode-style labels so the quota tracker reads the same way.
+ * OpenDesign's 7-day window is the weekly gate; there is no monthly window row.
+ */
 function windowName(seconds) {
   const s = Number(seconds);
   if (!Number.isFinite(s) || s <= 0) return "Allowance";
   const HOUR = 3600;
   const DAY = 24 * HOUR;
   const WEEK = 7 * DAY;
-  // Prefer familiar OpenDesign labels.
   if (Math.abs(s - 5 * HOUR) < 60) return "5 hours";
-  if (Math.abs(s - 7 * DAY) < 60) return "7 days";
-  if (s % WEEK === 0) return `${(s / WEEK) * 7} days`;
+  if (Math.abs(s - 7 * DAY) < 60) return "Weekly";
+  if (s % WEEK === 0) {
+    const n = s / WEEK;
+    return n === 1 ? "Weekly" : `${n * 7} days`;
+  }
   if (s % DAY === 0) {
     const n = s / DAY;
     return n === 1 ? "1 day" : `${n} days`;
@@ -56,7 +78,8 @@ function membershipTier(summary, preflight) {
     || text(preflight?.membershipTier)
     || text(preflight?.personalMembershipTier)
     || text(summary?.personalMembershipTier)
-    || text(preflight?.codingPlan?.tier);
+    || text(preflight?.codingPlan?.tier)
+    || text(preflight?.tier);
 }
 
 function planName(summary, preflight, codingPlan) {
@@ -69,6 +92,46 @@ function planName(summary, preflight, codingPlan) {
   if (!tier) return "OpenDesign Cloud";
   if (tier.toLowerCase() === "free") return "OpenDesign Free";
   return `Design Plan ${tier[0].toUpperCase()}${tier.slice(1)}`;
+}
+
+function planCapsFor(tier) {
+  const key = text(tier).toLowerCase();
+  return PLAN_CAPS[key] || null;
+}
+
+function planMessage({ tier, hasFiveHour, hasWeekly, noDesignPlan, balanceUsd }) {
+  if (noDesignPlan) {
+    if (Number.isFinite(balanceUsd) && balanceUsd > 0) {
+      return "Free has no Design Plan windows. The Wallet amount is trial/top-up balance (often DeepSeek V4.1 Flash only, short expiry) — not a recurring subscription allowance.";
+    }
+    return "Free has no Design Plan allowance. Upgrade to Go/Plus for recurring credits, or use wallet top-up / BYOK.";
+  }
+
+  const caps = planCapsFor(tier);
+  const bits = [];
+
+  if (hasWeekly && !hasFiveHour) {
+    bits.push(
+      "OpenDesign Plus/Pro/Max Design Plan only exposes a Weekly (7-day) live window — there is no 5-hour row and no OpenCode-style Monthly % meter in the API.",
+    );
+  } else if (hasFiveHour && hasWeekly) {
+    bits.push(
+      "Live Design Plan gates are 5 hours + Weekly. OpenDesign does not return a separate Monthly usage % (unlike OpenCode Go).",
+    );
+  } else if (!hasWeekly && !hasFiveHour) {
+    bits.push("OpenDesign returned no Design Plan window data.");
+  }
+
+  if (caps) {
+    const top = caps.topModelMonthUsd > 0
+      ? `; Top Model Credits $${caps.topModelMonthUsd}/mo (billing cycle)`
+      : "";
+    bits.push(
+      `Published Design Plan monthly maximum ≈ $${caps.designPlanMonthUsd}${top}. Weekly live cap ≈ $${caps.weeklyUsd}${caps.fiveHourUsd != null ? `; 5h ≈ $${caps.fiveHourUsd}` : ""}.`,
+    );
+  }
+
+  return bits.join(" ");
 }
 
 async function api(path, controlKey, proxyOptions) {
@@ -175,11 +238,13 @@ export async function getOpenDesignUsage(
     }
 
     const balanceUsd = toFiniteNumber(preflight?.balanceUsd ?? summary?.balanceUsd, NaN);
-    const hasDesignWindows = Object.keys(quotas).length > 0;
+    const hasFiveHour = Boolean(quotas["5 hours"]);
+    const hasWeekly = Boolean(quotas.Weekly);
+    const hasDesignWindows = hasFiveHour || hasWeekly || Object.keys(quotas).length > 0;
     const noDesignPlan = plan && plan.eligible === false && !hasDesignWindows;
+    const tier = membershipTier(summary, { ...preflight, ...ws, codingPlan: plan });
 
     // Free / trial accounts have no Design Plan windows; usable cloud credit is wallet.
-    // Surface wallet as a quota so the tracker is not empty / misleading.
     if (Number.isFinite(balanceUsd) && (!hasDesignWindows || noDesignPlan)) {
       quotas.Wallet = {
         used: 0,
@@ -201,17 +266,14 @@ export async function getOpenDesignUsage(
       result.balance = `$${balanceUsd.toFixed(2)}`;
     }
 
-    if (noDesignPlan) {
-      if (Number.isFinite(balanceUsd) && balanceUsd > 0) {
-        result.message =
-          "Free has no Design Plan windows. The Wallet amount is trial/top-up balance (often DeepSeek V4.1 Flash only, short expiry) — not a recurring subscription allowance.";
-      } else {
-        result.message =
-          "Free has no Design Plan allowance. Upgrade to Go/Plus for recurring credits, or use wallet top-up / BYOK.";
-      }
-    } else if (!hasDesignWindows) {
-      result.message = "OpenDesign returned no Design Plan window data.";
-    }
+    const message = planMessage({
+      tier,
+      hasFiveHour,
+      hasWeekly,
+      noDesignPlan,
+      balanceUsd,
+    });
+    if (message) result.message = message;
 
     return result;
   } catch (error) {
