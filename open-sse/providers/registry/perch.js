@@ -19,7 +19,7 @@ export default {
     textIcon: "PC",
     website: "https://perchai.app",
     notice: {
-      text: "Click Sign in with Perch. On Unraid paste the 127.0.0.1:45871/callback?code=… URL after login. Sends CLI persona + turn tickets (anti surface-gate). Unofficial model-call bridge — no public Perch chat API.",
+      text: "Sign in with Perch (Unraid: paste 127.0.0.1:45871/callback?code=… after login). Starter free: ~20k PT/mo (~$20) incl. DeepSeek V4.1 Flash via deepseek-flash-starter. Pro $10 EA: Roost fair-use + 75k PT/mo manual pins (15k/5h, 37.5k/7d) — DeepSeek V4.1 Flash / 1017 share that pool. Unofficial model-call bridge.",
       signupUrl: "https://perchai.app/pricing",
     },
   },
@@ -35,11 +35,24 @@ export default {
       "x-perch-locale": "en",
     },
   },
+  // Roost ids → roostModelChoice; everything else pins via preferredModelId
+  // (see executors/perch.js resolveModel). CLI ids match Perch docs /model.
   models: [
     { id: "perch", name: "Roost Standard" },
     { id: "perch-standard-max", name: "Roost Standard Max" },
     { id: "perch-pro", name: "Roost Pro" },
     { id: "perch-pro-max", name: "Roost Pro Max" },
+    // DeepSeek — Starter pool
+    { id: "deepseek-flash-starter", name: "DeepSeek V4.1 Flash (Starter)" },
+    // DeepSeek — Pro+ manual pins
+    { id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash" },
+    { id: "deepseek-v4.1-flash-1017", name: "DeepSeek V4.1 Flash (1017)" },
+    { id: "deepseek-v4-flash-0731", name: "DeepSeek V4 Flash 0731" },
+    { id: "deepseek-v4-pro-0813", name: "DeepSeek V4 Pro 0813" },
+    // Other Starter-selectable ids (current Perch lineup)
+    { id: "laguna-s", name: "Laguna S 2.1" },
+    { id: "glm-5.3-flash-starter", name: "GLM 5.3 Flash (Starter)" },
+    { id: "qwen-3.8-max", name: "Qwen 3.8 Max" },
   ],
   oauth: {
     appUrl: "https://app.perchai.app",
