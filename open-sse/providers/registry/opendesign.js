@@ -21,7 +21,7 @@ export default {
     textIcon: "OD",
     website: "https://open-design.ai",
     notice: {
-      text: "Go / Plus / Pro / Max subscription credits (shared with the OpenDesign app). Free plan has no Cloud API.",
+      text: "Go / Plus / Pro / Max include Design Plan credits (shared with the app). Free has no recurring Design Plan — only short trial wallet credit (often DeepSeek V4.1 Flash).",
       apiKeyUrl: "https://open-design.ai/help/cloud-api/",
       signupUrl: "https://open-design.ai/pricing/",
     },

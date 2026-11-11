@@ -51,12 +51,23 @@ function windowName(seconds) {
   return `${Math.round(s / 60)} minutes`;
 }
 
-function planName(summary, preflight) {
-  const tier = text(summary?.membershipTier)
+function membershipTier(summary, preflight) {
+  return text(summary?.membershipTier)
     || text(preflight?.membershipTier)
     || text(preflight?.personalMembershipTier)
-    || text(summary?.personalMembershipTier);
+    || text(summary?.personalMembershipTier)
+    || text(preflight?.codingPlan?.tier);
+}
+
+function planName(summary, preflight, codingPlan) {
+  const tier = membershipTier(summary, preflight);
+  // Free / no Design Plan: OpenDesign still returns codingPlan.eligible === false.
+  if (codingPlan && codingPlan.eligible === false) {
+    if (!tier || tier.toLowerCase() === "free") return "OpenDesign Free";
+    return `OpenDesign ${tier[0].toUpperCase()}${tier.slice(1)} (no Design Plan)`;
+  }
   if (!tier) return "OpenDesign Cloud";
+  if (tier.toLowerCase() === "free") return "OpenDesign Free";
   return `Design Plan ${tier[0].toUpperCase()}${tier.slice(1)}`;
 }
 
@@ -139,25 +150,50 @@ export async function getOpenDesignUsage(
 
     const quotas = {};
     for (const w of plan?.windows ?? []) {
+      // Prefer remainingCredits when present; used/limit may arrive as strings.
       const used = toFiniteNumber(w?.usedCredits, NaN);
       const total = toFiniteNumber(w?.limitCredits, NaN);
-      if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) continue;
+      const remainingHint = toFiniteNumber(w?.remainingCredits, NaN);
+      if (!Number.isFinite(total) || total <= 0) continue;
+      const remaining = Number.isFinite(remainingHint)
+        ? Math.max(0, remainingHint)
+        : Number.isFinite(used)
+          ? Math.max(0, total - used)
+          : NaN;
+      if (!Number.isFinite(remaining)) continue;
+      const usedSafe = Number.isFinite(used) ? used : Math.max(0, total - remaining);
       const name = windowName(w?.durationSeconds);
-      const remaining = Math.max(0, total - used);
       quotas[name] = {
-        used,
+        used: usedSafe,
         total,
         remaining,
         remainingPercentage: Math.max(0, Math.min(100, (remaining / total) * 100)),
         resetAt: parseResetTime(w?.resetsAt),
         unlimited: false,
-        display: `${used} / ${total} credits`,
+        display: `${usedSafe} / ${total} credits`,
       };
     }
 
     const balanceUsd = toFiniteNumber(preflight?.balanceUsd ?? summary?.balanceUsd, NaN);
+    const hasDesignWindows = Object.keys(quotas).length > 0;
+    const noDesignPlan = plan && plan.eligible === false && !hasDesignWindows;
+
+    // Free / trial accounts have no Design Plan windows; usable cloud credit is wallet.
+    // Surface wallet as a quota so the tracker is not empty / misleading.
+    if (Number.isFinite(balanceUsd) && (!hasDesignWindows || noDesignPlan)) {
+      quotas.Wallet = {
+        used: 0,
+        total: balanceUsd,
+        remaining: Math.max(0, balanceUsd),
+        remainingPercentage: balanceUsd > 0 ? 100 : 0,
+        resetAt: null,
+        unlimited: false,
+        display: `$${balanceUsd.toFixed(2)} remaining`,
+      };
+    }
+
     const result = {
-      plan: planName(summary, { ...preflight, ...ws }),
+      plan: planName(summary, { ...preflight, ...ws }, plan),
       quotas,
     };
 
@@ -165,10 +201,15 @@ export async function getOpenDesignUsage(
       result.balance = `$${balanceUsd.toFixed(2)}`;
     }
 
-    if (plan && plan.eligible === false && Object.keys(quotas).length === 0) {
-      result.message =
-        "This account has no Design Plan allowance — requests draw on wallet balance.";
-    } else if (Object.keys(quotas).length === 0) {
+    if (noDesignPlan) {
+      if (Number.isFinite(balanceUsd) && balanceUsd > 0) {
+        result.message =
+          "Free has no Design Plan windows. The Wallet amount is trial/top-up balance (often DeepSeek V4.1 Flash only, short expiry) — not a recurring subscription allowance.";
+      } else {
+        result.message =
+          "Free has no Design Plan allowance. Upgrade to Go/Plus for recurring credits, or use wallet top-up / BYOK.";
+      }
+    } else if (!hasDesignWindows) {
       result.message = "OpenDesign returned no Design Plan window data.";
     }
 

@@ -67,6 +67,29 @@ describe("getOpenDesignUsage", () => {
     });
   });
 
+  it("shows Free wallet trial balance when Design Plan is not eligible", async () => {
+    proxyAwareFetch
+      .mockResolvedValueOnce(jsonResponse(200, { activeWorkspaceId: "ws_free", personalMembershipTier: "free" }))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        balanceUsd: "0.37",
+        codingPlan: {
+          eligible: false,
+          windows: [],
+        },
+      }))
+      .mockResolvedValueOnce(jsonResponse(200, { membershipTier: "free", balanceUsd: "0.37" }));
+
+    const usage = await getOpenDesignUsage(null, null, { controlKey: "vela_ctrl_free" });
+    expect(usage.plan).toMatch(/Free/i);
+    expect(usage.balance).toBe("$0.37");
+    expect(usage.quotas.Wallet).toMatchObject({
+      remaining: 0.37,
+      display: "$0.37 remaining",
+    });
+    expect(usage.message).toMatch(/trial\/top-up|Wallet/i);
+    expect(usage.message).not.toMatch(/no Design Plan allowance — requests draw on wallet balance/);
+  });
+
   it("is registered in usage.js dispatch map", () => {
     const src = readFileSync(new URL("../../open-sse/services/usage.js", import.meta.url), "utf8");
     expect(src).toMatch(/opendesign:\s*\(c\)\s*=>\s*getOpenDesignUsage/);
