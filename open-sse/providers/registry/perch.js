@@ -19,7 +19,7 @@ export default {
     textIcon: "PC",
     website: "https://perchai.app",
     notice: {
-      text: "Click Add Connection (not the Perch website link). Sign in with Google/GitHub; on Unraid, paste the 127.0.0.1:45871/callback?code=… URL from the address bar after login. Unofficial model-call bridge — no public Perch chat API.",
+      text: "Click Sign in with Perch. On Unraid paste the 127.0.0.1:45871/callback?code=… URL after login. Sends CLI persona + turn tickets (anti surface-gate). Unofficial model-call bridge — no public Perch chat API.",
       signupUrl: "https://perchai.app/pricing",
     },
   },

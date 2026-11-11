@@ -27,8 +27,9 @@ const perch = {
 
   prepareConfig: async (config) => {
     const appUrl = (config.appUrl || "https://app.perchai.app").replace(/\/+$/, "");
+    const cliVersion = config.cliVersion || "2.4.118";
     const cfgRes = await fetch(config.cliAuthConfigUrl || `${appUrl}/api/perch-terminal/cli-auth/config`, {
-      headers: { Accept: "application/json", "User-Agent": `perchai-cli/${config.cliVersion || "2.4.118"}` },
+      headers: { Accept: "application/json", "User-Agent": `perchai-cli/${cliVersion}` },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const cfg = await readJson(cfgRes);
@@ -42,6 +43,7 @@ const perch = {
     return {
       ...config,
       appUrl,
+      cliVersion,
       redirectHost,
       supabaseUrl: String(cfg.supabaseUrl).replace(/\/+$/, ""),
       supabaseAnonKey: cfg.supabaseAnonKey,
@@ -96,6 +98,8 @@ const perch = {
     return tokens;
   },
 
+  // mapTokens receives tokens; prepareConfig values are not re-passed here, so
+  // bake known Supabase defaults (overwritten on refresh from live config).
   mapTokens: (tokens) => {
     const email = tokens.user?.email || null;
     const userId = tokens.user?.id || null;
@@ -113,7 +117,14 @@ const perch = {
       providerSpecificData: {
         authMethod: "supabase_pkce",
         appUrl: "https://app.perchai.app",
+        supabaseUrl: "https://zlfuvsfjtgsdtqcaykia.supabase.co",
+        // Publishable anon key from cli-auth/config (same as perchai-cli).
+        supabaseAnonKey: "sb_publishable_w4R_pNkUpygBFIljZCoOlA_67ACg0FO",
+        cliVersion: "2.4.118",
+        clientSurface: "cli",
+        lane: "code",
         userId,
+        email,
         expiresAt: typeof tokens.expires_at === "number"
           ? tokens.expires_at
           : Math.floor(Date.now() / 1000) + expiresIn,

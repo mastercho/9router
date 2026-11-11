@@ -3,6 +3,28 @@ import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 
+const CLI_VERSION_DEFAULT = "2.4.118";
+const TICKET_TIMEOUT_MS = 8_000;
+const TICKET_MARGIN_MS = 30_000;
+
+/**
+ * Official Perch CLI persona. Perch gates hosted models to Web/Desktop/CLI
+ * surfaces and fingerprints the CLI via this system prompt + clientSurface
+ * + turn ticket. Without it, model-call returns perch_surface_required.
+ * Source: perchai-cli / perch2api prompt.mjs.
+ */
+export const PERCH_CLI_PERSONA = `You are Perch, a careful and direct assistant.
+
+Answer the question that was asked. Prefer concrete, checkable statements
+over hedged generalities; when you are unsure, say which part is uncertain
+and why. Use the tools you are given when they would produce a better
+answer than reasoning alone, and say what you did with them.
+
+Keep formatting proportionate to the answer: prose for explanations, lists
+for enumerations, fenced code blocks for code with the language named. Do
+not repeat the question back, do not narrate what you are about to do, and
+do not close with a summary of what you just said.`;
+
 const ROOST = {
   perch: "standard",
   "perch-standard": "standard",
@@ -10,6 +32,9 @@ const ROOST = {
   "perch-pro": "pro",
   "perch-pro-max": "pro_max",
 };
+
+/** Per-process turn-ticket cache keyed by runId. */
+const ticketCache = new Map();
 
 function openaiChunk({ id, model, delta, finishReason = null }) {
   return {
@@ -42,27 +67,116 @@ function resolveModel(model) {
   return { kind: "pin", preferredModelId: id, label: id };
 }
 
+function cliVersionOf(credentials) {
+  return credentials?.providerSpecificData?.cliVersion
+    || process.env.PERCH_CLI_VERSION
+    || CLI_VERSION_DEFAULT;
+}
+
+function surfaceOf(credentials) {
+  return credentials?.providerSpecificData?.clientSurface
+    || process.env.PERCH_CLI_SURFACE
+    || "cli";
+}
+
+function systemPrefixOf(credentials) {
+  // Prefer explicit override, then env, then the baked CLI persona (anti-trace).
+  const custom = credentials?.providerSpecificData?.systemPrefix
+    || process.env.PERCH_SYSTEM_PREFIX
+    || "";
+  return custom || PERCH_CLI_PERSONA;
+}
+
 function prependSystemPrefix(messages, prefix) {
   if (!prefix) return messages;
   const list = Array.isArray(messages) ? [...messages] : [];
   const first = list[0];
   if (first?.role === "system" && typeof first.content === "string") {
-    if (first.content.startsWith(prefix)) return list;
-    list[0] = { ...first, content: `${prefix}${first.content}` };
+    if (first.content.startsWith(prefix) || first.content.includes("You are Perch,")) {
+      return list;
+    }
+    list[0] = { ...first, content: `${prefix}\n\n${first.content}` };
     return list;
   }
   return [{ role: "system", content: prefix }, ...list];
 }
 
+/** Decode unsigned JWT/base64url ticket claim blob (no verify — same as perch2api). */
+function claimOf(ticket) {
+  try {
+    const part = String(ticket || "").split(".")[0];
+    if (!part) return {};
+    const padded = part.replace(/-/g, "+").replace(/_/g, "/");
+    const json = Buffer.from(padded + "=".repeat((4 - (padded.length % 4)) % 4), "base64").toString("utf8");
+    const obj = JSON.parse(json);
+    return obj && typeof obj === "object" ? obj : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
- * Perch model-call executor.
- *
- * Requires a system-prefix that satisfies Perch's surface gate
- * (`perch_surface_required` without it). Set via:
- *  - credentials.providerSpecificData.systemPrefix
- *  - process.env.PERCH_SYSTEM_PREFIX
- *
- * Extract once with perch2api's `node scripts/extract-prefix.mjs`.
+ * Mint (or reuse) x-perch-turn-ticket — required for strong CLI surface match.
+ */
+async function mintTurnTicket({ appUrl, accessToken, surface, runId, credentials, signal, proxyOptions, log }) {
+  const cached = ticketCache.get(runId);
+  if (cached && cached.expiresAt - TICKET_MARGIN_MS > Date.now()) {
+    return cached;
+  }
+
+  const url = `${appUrl}/api/perch-terminal/turn-ticket`;
+  const version = cliVersionOf(credentials);
+  try {
+    const res = await proxyAwareFetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`,
+        "User-Agent": `perchai-cli/${version}`,
+        "x-perch-locale": "en",
+      },
+      body: JSON.stringify({ surface, profile: "standard" }),
+      signal: signal || AbortSignal.timeout(TICKET_TIMEOUT_MS),
+    }, proxyOptions);
+
+    const json = await res.json().catch(() => null);
+    if (res.status === 429 || json?.errorCode === "turn_rate_limited") {
+      log?.warn?.("PERCH", "turn ticket rate-limited");
+      return null;
+    }
+    if (!res.ok || !json?.ticket) {
+      log?.warn?.("PERCH", `turn-ticket HTTP ${res.status}`);
+      return null;
+    }
+
+    const claim = claimOf(json.ticket);
+    const expiresAt = Number.isFinite(Number(json.expiresAt))
+      ? Number(json.expiresAt)
+      : (Number.isFinite(Number(claim.exp)) ? Number(claim.exp) * 1000 : Date.now() + 120_000);
+    const entry = {
+      token: json.ticket,
+      runId: json.runId || runId,
+      expiresAt,
+      userId: claim.uid || null,
+      workspaceId: claim.wid || null,
+    };
+    if (ticketCache.size > 64) ticketCache.delete(ticketCache.keys().next().value);
+    ticketCache.set(runId, entry);
+    if (json.runId && json.runId !== runId) ticketCache.set(json.runId, entry);
+    return entry;
+  } catch (err) {
+    log?.warn?.("PERCH", `turn-ticket error: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Perch model-call executor with CLI-surface anti-tracing:
+ *  - User-Agent: perchai-cli/<ver>
+ *  - clientSurface: "cli"
+ *  - baked CLI persona as system prefix
+ *  - x-perch-turn-ticket + attribution.workspaceId from ticket claims
  */
 export class PerchExecutor extends BaseExecutor {
   constructor() {
@@ -72,22 +186,22 @@ export class PerchExecutor extends BaseExecutor {
     });
   }
 
-  buildHeaders(credentials) {
-    const version = credentials?.providerSpecificData?.cliVersion || "2.4.118";
-    return {
+  buildHeaders(credentials, ticketToken = null) {
+    const version = cliVersionOf(credentials);
+    const headers = {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
       "User-Agent": `perchai-cli/${version}`,
       "x-perch-locale": "en",
       Authorization: `Bearer ${credentials.accessToken || credentials.apiKey || ""}`,
     };
+    if (ticketToken) headers["x-perch-turn-ticket"] = ticketToken;
+    return headers;
   }
 
-  buildPerchBody(model, body, credentials) {
+  buildPerchBody(model, body, credentials, { runId, ticket } = {}) {
     const resolved = resolveModel(model);
-    const prefix = credentials?.providerSpecificData?.systemPrefix
-      || process.env.PERCH_SYSTEM_PREFIX
-      || "";
+    const prefix = systemPrefixOf(credentials);
     const messages = prependSystemPrefix(body?.messages || [], prefix);
     const request = { messages };
     if (Array.isArray(body?.tools) && body.tools.length) {
@@ -97,14 +211,20 @@ export class PerchExecutor extends BaseExecutor {
     if (Number.isFinite(body?.max_tokens)) request.maxTokens = body.max_tokens;
     if (Number.isFinite(body?.temperature)) request.temperature = body.temperature;
 
+    const surface = surfaceOf(credentials);
     const out = {
       request,
-      runId: randomUUID(),
+      runId: ticket?.runId || runId || randomUUID(),
       lane: credentials?.providerSpecificData?.lane || process.env.PERCH_LANE || "code",
       strictManual: false,
-      clientSurface: "cli",
+      clientSurface: surface,
       attribution: {
-        userId: credentials?.providerSpecificData?.userId || null,
+        userId: ticket?.userId
+          || credentials?.providerSpecificData?.userId
+          || null,
+        workspaceId: ticket?.workspaceId
+          || credentials?.providerSpecificData?.workspaceId
+          || null,
         source: "cli",
       },
       avoidModelIds: [],
@@ -121,12 +241,23 @@ export class PerchExecutor extends BaseExecutor {
   async execute({ model, body, stream, credentials, signal, log, proxyOptions = null }) {
     const appUrl = (credentials?.providerSpecificData?.appUrl || "https://app.perchai.app").replace(/\/+$/, "");
     const url = `${appUrl}/api/perch-terminal/model-call`;
-    const { out: perchBody, label } = this.buildPerchBody(model, body, credentials);
-    const headers = this.buildHeaders(credentials);
+    const accessToken = credentials.accessToken || credentials.apiKey || "";
+    const surface = surfaceOf(credentials);
+    const runId = randomUUID();
 
-    if (!credentials?.providerSpecificData?.systemPrefix && !process.env.PERCH_SYSTEM_PREFIX) {
-      log?.warn?.("PERCH", "PERCH_SYSTEM_PREFIX / systemPrefix missing — upstream may return perch_surface_required");
-    }
+    const ticket = await mintTurnTicket({
+      appUrl,
+      accessToken,
+      surface,
+      runId,
+      credentials,
+      signal,
+      proxyOptions,
+      log,
+    });
+
+    const { out: perchBody, label } = this.buildPerchBody(model, body, credentials, { runId, ticket });
+    const headers = this.buildHeaders(credentials, ticket?.token || null);
 
     const upstream = await proxyAwareFetch(url, {
       method: "POST",
@@ -137,8 +268,18 @@ export class PerchExecutor extends BaseExecutor {
 
     if (!upstream.ok) {
       const text = await upstream.text().catch(() => "");
+      let hint = text;
+      try {
+        const j = JSON.parse(text);
+        if (j?.errorCode === "perch_surface_required") {
+          hint = JSON.stringify({
+            ...j,
+            hint: "Surface gate rejected the call. 9Router already sends CLI persona + turn ticket; reconnect OAuth and retry.",
+          });
+        }
+      } catch { /* keep raw */ }
       return {
-        response: new Response(text || JSON.stringify({ error: { message: `Perch HTTP ${upstream.status}` } }), {
+        response: new Response(hint || JSON.stringify({ error: { message: `Perch HTTP ${upstream.status}` } }), {
           status: upstream.status,
           headers: { "Content-Type": "application/json" },
         }),

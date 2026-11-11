@@ -206,10 +206,16 @@ async function refreshPerchToken(credentials, log) {
     expiresIn: body.expires_in || 3600,
     providerSpecificData: {
       ...(credentials.providerSpecificData || {}),
+      appUrl: credentials.providerSpecificData?.appUrl || appUrl,
+      supabaseUrl: cfg.supabaseUrl,
+      supabaseAnonKey: cfg.supabaseAnonKey,
+      cliVersion: credentials.providerSpecificData?.cliVersion || "2.4.118",
+      clientSurface: credentials.providerSpecificData?.clientSurface || "cli",
       expiresAt: typeof body.expires_at === "number"
         ? body.expires_at
         : Math.floor(Date.now() / 1000) + (body.expires_in || 3600),
       userId: body.user?.id || credentials.providerSpecificData?.userId,
+      email: body.user?.email || credentials.providerSpecificData?.email,
     },
   };
 }

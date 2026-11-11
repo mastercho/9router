@@ -18,6 +18,7 @@ import { getDeepseekUsage } from "./usage/deepseek.js";
 import { getOpenCodeGoUsage } from "./usage/opencode-go.js";
 import { getOpenCodeZenUsage } from "./usage/opencode-zen.js";
 import { getOpenDesignUsage } from "./usage/opendesign.js";
+import { getPerchUsage } from "./usage/perch.js";
 import { getGroqUsage } from "./usage/groq.js";
 import { getZedUsage } from "./usage/zed.js";
 import { getXiaomiMimoUsage } from "./usage/xiaomi-mimo.js";
@@ -65,6 +66,7 @@ const USAGE_HANDLERS = {
   "opencode-go": (c) => getOpenCodeGoUsage(c.apiKey, c.proxyOptions),
   "opencode-zen": (c) => getOpenCodeZenUsage(c.apiKey, c.proxyOptions),
   opendesign: (c) => getOpenDesignUsage(c.accessToken, c.apiKey, c.providerSpecificData, c.proxyOptions),
+  perch: (c) => getPerchUsage(c.accessToken, c.apiKey, c.providerSpecificData, c.proxyOptions),
   deepseek: (c) => getDeepseekUsage(c.apiKey, c.proxyOptions),
   groq: (c) => getGroqUsage(c.apiKey, c.proxyOptions),
   zed: (c) => getZedUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
