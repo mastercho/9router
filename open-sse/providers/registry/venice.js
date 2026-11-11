@@ -13,11 +13,14 @@ export default {
     textIcon: "VE",
     website: "https://venice.ai",
     notice: {
-      text: "API-key / credits only. Venice Pro/Pro+/Max unlimited text is web/app only — API usage is metered separately and is NOT included in the subscription.",
+      text: "No subscription OAuth — Venice Pro/Pro+/Max unlimited text is web/app only. API is separate metered credits. Quota tracker needs an ADMIN API key for /billing/balance.",
       apiKeyUrl: "https://venice.ai/settings/api",
     },
   },
   category: "apikey",
+  features: {
+    usage: true,
+  },
   transport: {
     baseUrl: "https://api.venice.ai/api/v1/chat/completions",
     validateUrl: "https://api.venice.ai/api/v1/models",

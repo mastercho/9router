@@ -15,7 +15,7 @@ export default {
   },
   category: "webCookie",
   authType: "cookie",
-  authHint: "Paste your userToken from chat.deepseek.com localStorage (DevTools → Application → Local Storage)",
+  authHint: "Unraid/Docker: paste userToken from chat.deepseek.com (DevTools → Application → Local Storage). Open Browser needs Chrome on the 9Router host (not available in Docker).",
   transport: {
     baseUrl: "https://chat.deepseek.com/api/v0/chat/completion",
     format: "openai",

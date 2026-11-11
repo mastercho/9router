@@ -16,6 +16,9 @@ const ICON_ALIASES = {
   "muse-web": "muse",
   "gemini-web": "gemini",
   "chatgpt-web": "openai",
+  // Perch UI alias
+  pc: "perch",
+  perchai: "perch",
 };
 
 // Runtime only — first 404 remembers id for the whole session
@@ -39,6 +42,8 @@ export function resolveProviderIconId(providerId) {
 /** `/providers/{id}.png` or null when previously failed. */
 export function getProviderIconSrc(providerId) {
   const id = resolveProviderIconId(providerId);
+  // Cache-bust Perch after icon refresh so old 404 / black-on-dark assets clear.
+  if (id === "perch") return `/providers/perch.png?v=2`;
   return id ? `/providers/${id}.png` : null;
 }
 
